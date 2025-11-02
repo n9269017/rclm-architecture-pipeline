@@ -1,0 +1,403 @@
+% RCLLM — Architecture & Pipeline (Technical Report)
+% Compile with: pdflatex (or lualatex/xelatex)
+\documentclass[11pt]{article}
+
+% ---------- Packages ----------
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{setspace}
+\usepackage{amsmath, amssymb, amsfonts, mathtools}
+\usepackage{bm}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, citecolor=blue!60!black, urlcolor=blue!60!black}
+
+% TikZ (for the diagram at the end)
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, calc, backgrounds, fit}
+
+% ---------- Macros ----------
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\vecop}{\operatorname{vec}}
+\newcommand{\NLL}{\operatorname{NLL}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\KL}{\operatorname{KL}}
+\newcommand{\rank}{\operatorname{rank}}
+
+% Smaller, bold, body-font header for items 0)–10)
+\newcommand{\rcsection}[1]{\vspace{1.0em}\noindent\textbf{\normalsize #1}\par\vspace{0.35em}}
+
+% ---------- Title ----------
+\title{\textbf{Recursive Coherence Language Model (RCLM):\\Architecture \& Pipeline}}
+\author{Nicolas Calder}
+\date{\today}
+
+\begin{document}
+\maketitle
+\setstretch{1.08}
+
+\begin{abstract}
+The architecture and pipeline of a Recursive Coherence Model, is built atop a standard Transformer engine and augmented with a recursive coherence controller. The controller operates on a density-like state derived from objective and subjective projections of hidden representations, explicitly optimizing entropy reduction and coherence amplification under task constraints. We outline modules, operators, training objectives, inference loop, and scaling considerations, and provide a practical implementation sketch in
+\end{abstract}
+
+% ------------------------------------------------------------
+\section*{Introduction}
+A recursive coherence model, using a quantum physics based mathematical framework of (informational/shannon and quantum informational / von neuman + thermodynamic) entropy reduction through recursive quantum coherence
+
+Using the structure as
+
+\begin{verbatim}
+language >
+objectivity and subjectivity >>
+definitiveness and ambiguity >>>
+coherence and entropy >>>>
+\end{verbatim}
+
+\tableofcontents
+\vspace{1em}
+
+% ------------------------------------------------------------
+\rcsection{0) One-screen blueprint (from input $\to$ output)}
+Text $\to$ tokens $\to$ Transformer encoder/decoder $\to$ dual projections (objective / subjective) $\to$ density/state merge $\to$ RC loop (entropy$\downarrow$, coherence$\uparrow$) with halting $\to$ readout $\to$ logits $\to$ decode.
+
+% ------------------------------------------------------------
+\rcsection{1) Modules (concept $\to$ concrete)}
+\noindent\textbf{Language} $\to$ tokenizer + embeddings + base Transformer (engine).
+
+\noindent\textbf{Objectivity / Subjectivity} $\to$ two learned projections of hidden states:
+\begin{equation}
+  \psi^{(O)} = P_O\,h,\qquad \psi^{(S)} = P_S\,h
+\end{equation}
+(per token or per segment).
+
+\noindent\textbf{Definitiveness / Ambiguity} $\to$ mixed state:
+\begin{equation}
+  \rho_0=\alpha\,\psi^{(O)}{\psi^{(O)}}^\top + (1-\alpha)\,\psi^{(S)}{\psi^{(S)}}^\top,\qquad \Tr(\rho_0)=1
+\end{equation}
+(real or complex).
+
+\noindent\textbf{Coherence / Entropy (RC core)} $\to$ iterative operator:
+\begin{equation}
+  \rho_{t+1}=\Lambda_\theta(\rho_t,\,h,\,\text{meta})
+\end{equation}
+Halt via learned policy or metric threshold.
+
+% ------------------------------------------------------------
+\rcsection{2) State, metrics, and operators}
+\paragraph{Entropies}
+Shannon (on probabilities $p$):
+\begin{equation}
+  H(p)=-\sum_i p_i\log p_i
+\end{equation}
+von Neumann (on state $\rho$):
+\begin{equation}
+  S(\rho)=-\Tr(\rho\log \rho)
+\end{equation}
+
+\paragraph{Coherence (two common choices)}
+Relative entropy of coherence:
+\begin{equation}
+  C_{\mathrm{rel}}(\rho)=S(\rho_{\mathrm{diag}})-S(\rho)
+\end{equation}
+$\ell_1$-coherence:
+\begin{equation}
+  C_{\ell_1}(\rho)=\sum_{i\neq j}|\rho_{ij}|
+\end{equation}
+
+\paragraph{Task-aware free energy}
+With POVM $\{M_j\}$,
+\begin{equation}
+  E(\rho)\approx -\log \Tr(M_y\,\rho),\qquad F_T(\rho)=E(\rho)-T\,C_{\mathrm{rel}}(\rho)\,,
+\end{equation}
+where $T$ trades accuracy vs.\ coherence.
+
+\paragraph{RC update (examples)}
+\emph{Gradient-like descent} with projection $\Pi$ (to PSD, unit-trace):
+\begin{equation}
+  \rho_{t+1}=\Pi\!\left[\rho_t-\eta\,\nabla_{\rho}\big(E(\rho_t)-T\,C_{\mathrm{rel}}(\rho_t)\big)\right]
+\end{equation}
+\emph{Learned map (CPTP-like):}
+\begin{equation}
+  \rho_{t+1}=\sum_k A_k(\phi)\,\rho_t\,A_k(\phi)^\top,\qquad \sum_k A_k^\top A_k=I
+\end{equation}
+where $\phi$ summarizes $h$, step $t$, and meta.
+
+\paragraph{Halting}
+Metric stop: $|S(\rho_{t+1})-S(\rho_t)|<\varepsilon$ or $\Delta F_T<\varepsilon$. Learned stop: $\pi_{\text{halt}}(\rho_t,h)$.
+
+\paragraph{Readout to logits}
+\begin{equation}
+  p(j)=\Tr(M_j\,\rho_T),\qquad \sum_j M_j=I,\quad M_j\succeq 0
+\end{equation}
+(In practice, a linear map $\vecop(\rho_T)\!\to$ logits also works.)
+
+\paragraph{Paper-ready fusion readout (single-line, boxed)}
+\begin{equation}
+  \boxed{\,u_t=\vecop(\rho_t^\star)^\top W_r + V h_t,\; p_\theta(x_{t+1})=\softmax(W_o\,u_t)\,}
+\end{equation}
+where $\rho_t^\star$ is the converged/last RC state at step $t$.
+
+% ---- Notation (added at the end of Section 2) ----
+\section*{Notation}
+\small
+\begin{table}[h]
+\centering
+\begin{tabular}{llp{10cm}}
+\toprule
+\textbf{Symbol} & \textbf{Type / Shape} & \textbf{Meaning} \\
+\midrule
+$x_{1:n}$ & tokens & Input token sequence. \\
+$h$ & $\mathbb{R}^{d}$ (or $\mathbb{C}^{d}$) & Transformer hidden representation (pooled or per-step summary used by RC). \\
+$P_O,\ P_S$ & $\mathbb{R}^{d\times d}$ & Learned projections for \textbf{objective} and \textbf{subjective} views. \\
+$\psi^{(O)},\ \psi^{(S)}$ & $\mathbb{R}^{d}$ & Projected views: $\psi^{(O)}=P_O h,\ \psi^{(S)}=P_S h$. \\
+$\alpha$ & $[0,1]$ & Mixture weight for density assembly. \\
+$\rho$ & $\mathbb{R}^{d\times d}$ (PSD, $\mathrm{Tr}(\rho)=1$) & Density-like state; RC operates on $\rho_t$. \\
+$\rho_0$ & $\mathbb{R}^{d\times d}$ & Init: $\rho_0=\alpha\,\psi^{(O)}\psi^{(O)\top}+(1-\alpha)\,\psi^{(S)}\psi^{(S)\top}$. \\
+$U$ & $\mathbb{R}^{d\times r}$ & Low-rank factor ($r\ll d$) with $\rho\approx UU^\top$. \\
+$M_j$ & $\mathbb{R}^{d\times d}$ (PSD) & Readout operators (POVM-like), $\sum_j M_j=I$. \\
+$I$ & $\mathbb{R}^{d\times d}$ & Identity. \\
+$p(j)$ & $[0,1]$ & Token probability: $p(j)=\mathrm{Tr}(M_j\,\rho_T)$. \\
+$u_t$ & $\mathbb{R}^{m}$ & Fusion feature: $u_t=\mathrm{vec}(\rho_t^\star)^\top W_r + V h_t$. \\
+$W_r, V, W_o$ & matrices & Readout/fusion parameters; $p_\theta(x_{t+1})=\mathrm{softmax}(W_o u_t)$. \\
+$\Lambda_\theta$ & map & RC update: $\rho_{t+1}=\Lambda_\theta(\rho_t,h,\text{meta})$. \\
+$A_k(\phi)$ & $\mathbb{R}^{d\times d}$ & Kraus-like factors; $\sum_k A_k^\top A_k=I$. \\
+$\phi$ & feature vector & Summary features for RC (e.g., $h,t,\text{meta}$). \\
+$\Pi(\cdot)$ & projection & Projection to the PSD, unit-trace set. \\
+$E(\rho)$ & scalar & Task-energy surrogate, e.g., $-\log \mathrm{Tr}(M_y\rho)$. \\
+$S(\rho)$ & scalar & von Neumann entropy: $S(\rho)=-\mathrm{Tr}(\rho\log\rho)$. \\
+$C_{\mathrm{rel}}(\rho)$ & scalar & Relative entropy of coherence: $S(\rho_{\mathrm{diag}})-S(\rho)$. \\
+$C_{\ell_1}(\rho)$ & scalar & $\ell_1$ coherence: $\sum_{i\ne j}|\rho_{ij}|$. \\
+$F_T(\rho)$ & scalar & Coherence-aware free energy: $E(\rho)-T\,C_{\mathrm{rel}}(\rho)$. \\
+$T$ & $\mathbb{R}_{\ge 0}$ & Temperature. \\
+$\eta$ & $\mathbb{R}_{>0}$ & Step size. \\
+$\varepsilon$ & $\mathbb{R}_{>0}$ & Halt tolerance. \\
+$\pi_{\mathrm{halt}}$ & policy & Learned halting head $\pi_{\mathrm{halt}}(\rho_t,h)$. \\
+$t,\ T$ & ints & RC step index and max steps. \\
+$d,\ r$ & ints & Hidden dim and low-rank factor ($r\ll d$). \\
+$\mathrm{vec}(\cdot)$ & operator & Vectorization of a matrix. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textit{Basis note.} $\rho_{\mathrm{diag}}$ is taken in a fixed computational basis aligned with the readout.\\[0.5em]
+\normalsize
+
+% ------------------------------------------------------------
+\rcsection{3) Training objectives}
+\paragraph{Base NLL}
+\begin{equation}
+  L_{\mathrm{NLL}}=-\sum_t \log p_\theta(x_t\,|\,x_{<t})
+\end{equation}
+
+\paragraph{RC regularizers}
+Free-energy schedule:
+\begin{equation}
+  L_{\mathrm{FE}}=\sum_t F_T(\rho_t)
+\end{equation}
+Monotonicity (encourage $S\downarrow$, $C_{\mathrm{rel}}\uparrow$):
+\begin{equation}
+  L_{\mathrm{mono}}=\sum_t \Big[\max(0,S(\rho_{t+1})-S(\rho_t))+\max(0, C_{\mathrm{rel}}(\rho_t)-C_{\mathrm{rel}}(\rho_{t+1}))\Big]
+\end{equation}
+Optional O/S supervision (DPO/IPO-style); stability/CPTP penalties.
+
+\paragraph{Total loss (example)}
+\begin{equation}
+  L=L_{\mathrm{NLL}}+\lambda_{\mathrm{FE}}L_{\mathrm{FE}}+\lambda_{\mathrm{mono}}L_{\mathrm{mono}}+\lambda_{\mathrm{stab}}L_{\mathrm{stab}}+\lambda_{O/S}L_{O/S}\,.
+\end{equation}
+
+% ------------------------------------------------------------
+\rcsection{4) Forward pass (inference) --- minimal loop}
+\begin{enumerate}[leftmargin=2em,label=\arabic*.]
+  \item Encode $h=\mathrm{Transformer}(x_{1:n})$.
+  \item Dual heads: $(\psi^{(O)},\psi^{(S)})=(P_O h,P_S h)$; normalize.
+  \item Initialize: $\rho_0=\alpha\,\psi^{(O)}{\psi^{(O)}}^\top+(1-\alpha)\,\psi^{(S)}{\psi^{(S)}}^\top$.
+  \item RC loop ($t=0,\dots,T-1$): $\rho_{t+1}=\Lambda_\theta(\rho_t,h,\text{meta})$; check halt.
+  \item Readout: \emph{fusion} eq.\ above; decode via $\softmax$.
+\end{enumerate}
+
+% ------------------------------------------------------------
+\rcsection{5) Where RC attaches (three useful placements)}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Outer loop (default):} after final layer on a compact summary of $h$ (lowest latency hit).
+  \item \textbf{Interleaved blocks:} a small RC step every $k$ Transformer layers (good for long-context reasoning).
+  \item \textbf{Head-only:} RC on a pooled token (e.g., BOS) for global planning (cheap/effective).
+\end{itemize}
+
+% ------------------------------------------------------------
+\rcsection{6) Data signals for O/S heads}
+\textbf{Objective seeds:} retrieval/citations, executable code tests, unit proof checks.\\
+\textbf{Subjective seeds:} style, stance, hedging, valence, ambiguity in instructions.\\
+\textbf{Weak supervision:} self-play pairs (more/less definitive), RAG correctness checks, programmatic detectors.
+
+% ------------------------------------------------------------
+\rcsection{7) Evaluation (beyond standard benchmarks)}
+\begin{itemize}[leftmargin=1.5em]
+  \item $\Delta S$ per step: distribution of $S(\rho_t)-S(\rho_{t+1})$.
+  \item Coherence lift: $C_{\mathrm{rel}}(\rho_T)-C_{\mathrm{rel}}(\rho_0)$.
+  \item Quality vs.\ steps: accuracy/BLEU/Pass@k vs.\ $T$ (elbow/auto-halt detection).
+  \item Stability: PSD violations, trace drift; variance under small prompt perturbations.
+  \item Thermo lens: do $F_T$ trajectories correlate with correctness?
+\end{itemize}
+
+% ------------------------------------------------------------
+\rcsection{8) Scaling \& systems}
+\textbf{Cost control:} low-rank $\rho=UU^\top$, $U\in\R^{d\times r}$, $r\ll d$; update $U$ $\Rightarrow$ $O(dr)$ memory.\\
+\textbf{Batching:} share KV-cache from engine; RC loop is a lightweight MLP/Kraus mixer.\\
+\textbf{Latency knobs:} $T_{\max}$, temperature $T$, rank $r$; enable early-halt.\\
+\textbf{Quantization:} keep engine int8/int4; run RC in bf16/fp16 for numerical stability.
+
+% ------------------------------------------------------------
+\rcsection{9) Minimal math to “summarize the whole thing”}
+\noindent\textbf{(A) Density assembly}
+\begin{equation}
+  \rho_0=\alpha\,\psi^{(O)}{\psi^{(O)}}^\top+(1-\alpha)\,\psi^{(S)}{\psi^{(S)}}^\top,\qquad \Tr(\rho_0)=1
+\end{equation}
+\noindent\textbf{(B) Coherence-aware free-energy descent (one step)}
+\begin{equation}
+  \rho_{t+1}=\Pi\!\Big[\rho_t-\eta\,\nabla_\rho\big(\underbrace{E(\rho_t)}_{\text{task loss}}-\underbrace{T\,C_{\mathrm{rel}}(\rho_t)}_{\text{coherence}}\big)\Big]
+\end{equation}
+\noindent\textbf{(C) Readout to token probabilities}
+\begin{equation}
+  p(j)=\Tr(M_j\,\rho_T),\qquad \sum_j M_j=I,\quad M_j\succeq 0
+\end{equation}
+
+% ------------------------------------------------------------
+\rcsection{10) Practical implementation sketch (PyTorch)}
+\begin{enumerate}[leftmargin=2em,label=\arabic*.]
+  \item Compute $h$ with your Transformer.
+  \item Two linear heads $\to$ $\psi^{(O)}$, $\psi^{(S)}$; normalize.
+  \item Rank-$r$ construction: $U=[\,\alpha\,\psi^{(O)},\,(1-\alpha)\,\psi^{(S)}\,]$ (+ optional learned projector to widen rank).
+  \item RC block: tiny MLP $\to$ $K$ Kraus-like factors (or $\Delta U$); project to PSD and trace-1.
+  \item Learned halt head; cap $T_{\max}$.
+  \item Fusion readout (boxed): tie/untie $W_o$ with embeddings as desired.
+\end{enumerate}
+
+\vspace{1em}
+\noindent\textbf{Engineering tip.} Keep RC outside the base network to switch RC on/off, tune $T$, cap steps $T_{\max}$, and manage latency/quality trade-offs.
+
+% ------------------------------------------------------------
+% Diagram
+\section*{}
+\vspace*{-2.5cm}
+\begin{flushright}
+\begin{tikzpicture}[
+  xshift=0.8cm,
+  yshift=1.2cm,
+  >=Stealth,
+  node distance = 12mm and 14mm,
+  font=\small,
+  process/.style   = {draw, rounded corners, align=center, minimum height=8mm, minimum width=32mm},
+  module/.style    = {draw, rounded corners, align=center, minimum height=10mm, minimum width=36mm},
+  decision/.style  = {draw, diamond, inner sep=1.5pt, align=center},
+  metric/.style    = {draw, align=center, minimum height=6mm, minimum width=32mm},
+  annot/.style     = {align=center},
+  loopbox/.style   = {draw, rounded corners, dashed, inner sep=10pt}
+]
+
+\node[process] (inp) {Text};
+\node[process, below=of inp] (tok) {Tokenizer\\(BPE/Unigram)};
+\node[module,  below=of tok] (trf) {Transformer Core\\(KV cache, attention, MLP)};
+
+\node[process, below=16mm of trf, xshift=-26mm] (projO) {$\psi^{(O)} = P_O\, h$};
+\node[process, below=16mm of trf, xshift= 26mm] (projS) {$\psi^{(S)} = P_S\, h$};
+
+\node[module, below=18mm of $(projO)!0.5!(projS)$] (rho0) {$\displaystyle
+\rho_0 = \alpha\, \psi^{(O)}\psi^{(O)\!\top} + (1-\alpha)\,\psi^{(S)}\psi^{(S)\!\top}$\\[2pt]
+\footnotesize $\mathrm{Tr}(\rho_0)=1,\ \rho_0 \succeq 0$
+};
+
+\node[loopbox, below=18mm of rho0, minimum width=92mm, minimum height=72mm] (rcbox) {};
+\node[annot, anchor=south west, fill=white, inner sep=1pt]
+  at ($(rcbox.north west)+(0,8mm)$) {\bf Recursive Coherence Loop};
+
+\node[process, minimum width=82mm, text width=82mm]
+  (update) at ($(rcbox.north)+(0,-16mm)$)
+  {$\rho_{t+1}=\Lambda_{\theta}\!\big(\rho_t,\, h,\, \text{meta}\big)$};
+
+\node[metric, below=10mm of update, minimum width=82mm, text width=82mm]
+  (metrics) {$\displaystyle S(\rho)=-\mathrm{Tr}(\rho\log\rho),\quad
+  C_{\mathrm{rel}}(\rho)=S(\rho_{\mathrm{diag}})-S(\rho)$};
+
+\node[decision, below=12mm of metrics, minimum width=24mm, minimum height=14mm]
+  (halt) {Halt if\\ $\Delta S<\varepsilon$\\ or learned stop};
+
+\node[process, above=10mm of update] (rhoin) {$\rho_t$};
+\draw[->] (rhoin) -- (update);
+\draw[->] (metrics.west) -- ++(-10mm,0) |- (update.west);
+\draw[->] (update) -- (metrics);
+\draw[->] (metrics) -- (halt);
+
+\node[process, below=12mm of rcbox.south] (rhoout) {$\rho_T$};
+\draw[->] (halt.south) -- ++(0,-6mm) |- (rhoout);
+
+\node[module, below=14mm of rhoout, minimum width=86mm, text width=86mm]
+  (readout) {$\displaystyle p(j) = \mathrm{Tr}(M_j\, \rho_T),\quad \sum_j M_j=I,\ M_j\succeq 0$};
+
+\node[process, below=6mm of readout] (decode) {Decode\\(sample)};
+
+\draw[->] (inp) -- (tok);
+\draw[->] (tok) -- (trf);
+\draw[->] (trf) -- (projO);
+\draw[->] (trf) -- (projS);
+\draw[->] (projO) -- (rho0);
+\draw[->] (projS) -- (rho0);
+
+\draw[->] (rho0) -- ($(rcbox.north)+(0,0)$);
+\draw[->] ($(rcbox.north)+(0,0)$) -- (rhoin);
+
+\draw[->] (rhoout) -- (readout);
+\draw[->] (readout) -- (decode);
+
+\node[annot, right=4mm of metrics, text width=48mm, anchor=west, inner sep=1pt] (feq) {\footnotesize
+Coherence-aware step:\\[2pt]
+$\rho_{t+1} \leftarrow \Pi\!\big[\rho_t - \eta\, \nabla_{\rho}\big(\mathcal{E}(\rho_t) - T\, C_{\mathrm{rel}}(\rho_t)\big)\big]$
+};
+
+\node[annot, left=10mm of tok]     {Language};
+\node[annot, left=10mm of trf]     {Engine};
+\node[annot, left=11mm of projO]   {Objectivity};
+\node[annot, right=11mm of projS]  {Subjectivity};
+\node[annot, left=10mm of rho0]    {Definitiveness / Ambiguity};
+\node[annot, left=12mm of rcbox]   {Coherence / Entropy};
+
+\end{tikzpicture}
+\end{flushright}
+
+% ------------------------------------------------------------
+\section*{References}
+\begin{itemize}[leftmargin=1.25em]
+  \item Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, Ł., Polosukhin, I., ``Attention Is All You Need.'' (NeurIPS 2017)
+  \item Su, J., Lu, Y., Pan, S., ``RoFormer: Enhanced Transformer with Rotary Position Embedding.'' (NeurIPS 2021)
+  \item Press, O., Smith, N., Lewis, M., ``Train Short, Test Long: Attention with Linear Biases (ALiBi).'' (arXiv 2021)
+  \item Dao, T., Fu, D. Y., Ermon, S., Rudra, A., Ré, C., ``FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness.'' (NeurIPS 2022)
+  \item Shazeer, N., ``Fast Transformer Decoding: One Write-Head Is All You Need (Multi-Query Attention).'' (arXiv 2019)
+  \item Ainslie, J., Ontañón, S., Alberti, C., Cvicek, V., Fisher, Z., Pham, P., \emph{et al.}, ``GQA: Training Generalized Multi-Query Transformer Models Efficiently.'' (arXiv 2023)
+  \item Fedus, W., Zoph, B., Shazeer, N., ``Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity.'' (arXiv 2021; JMLR 2022)
+  \item Hoffmann, J., Borgeaud, S., Mensch, A., Buchatskaya, E., \emph{et al.}, ``Training Compute-Optimal Large Language Models.'' (NeurIPS 2022; ``Chinchilla'')
+  \item Zhang, B., Sennrich, R., ``Root Mean Square Layer Normalization.'' (NeurIPS 2019 Workshop / arXiv 2019)
+  \item Wang, S., Li, B., Khabsa, M., Fang, H., Ma, H., ``DeepNet: Scaling Transformers to 1{,}000 Layers.'' (ICML 2022) (DeepNorm)
+  \item Yang, G., Zhang, T., Saxe, A., ``Tensor Programs V: Tuning Large Neural Networks via Zero-Shot Hyperparameter Transfer.'' (NeurIPS 2022) ($\mu$P)
+  \item Kwon, W., Shao, R., Xie, Z., Xu, F. F., \emph{et al.}, ``Efficient Memory Management for Large Language Model Serving with PagedAttention (vLLM).'' (SOSP 2023 / arXiv 2023)
+  \item Chen, J., Sun, X., Zhang, J., Li, H., ``Extending Context Window of Large Language Models via Positional Interpolation.'' (arXiv 2023)
+  \item Lewis, P., Perez, E., Piktus, A., Petroni, F., \emph{et al.}, ``Retrieval-Augmented Generation for Knowledge-Intensive NLP.'' (NeurIPS 2020)
+  \item Chen, T., Levkovitch, N., Benaim, S., \emph{et al.}, ``Accelerating Large Language Model Decoding with Speculative Sampling/Decoding.'' (arXiv 2023) (Any equivalent “speculative decoding” paper is fine; multiple variants exist.)
+  \item Ouyang, L., Wu, J., Jiang, X., Almeida, D., \emph{et al.}, ``Training Language Models to Follow Instructions with Human Feedback.'' (NeurIPS 2022) (RLHF)
+  \item Rafailov, R., Sharma, A., Mitchell, E., Ermon, S., Finn, C., ``Direct Preference Optimization: Your Language Model Is Secretly a Reward Model.'' (NeurIPS 2023) (DPO)
+  \item Hong, J., Kim, S., Na, B., \emph{et al.}, ``ORPO: Monolithic Preference Optimization without a Separate Reward Model.'' (EMNLP 2024)
+  \item Nielsen, M. A., Chuang, I. L., \emph{Quantum Computation and Quantum Information}. (Cambridge University Press, 2010) (density matrices, POVMs, CPTP/Kraus)
+  \item Baumgratz, T., Cramer, M., Plenio, M. B., ``Quantifying Coherence.'' (Physical Review Letters, 2014) (relative-entropy and $\ell_1$ coherence)
+  \item Higham, N. J., ``Computing the Nearest Correlation Matrix—A Problem from Finance.'' (IMA Journal of Numerical Analysis, 2002) (PSD projection ideas)
+  \item Wang, W., Carreira-Perpiñán, M. Á., ``Projection onto the Probability Simplex: An Efficient Algorithm with a Simple Proof.'' (arXiv 2013) (simplex/trace-1 projection)
+  \item (Definition reference) ``Von Neumann Entropy.'' (Standard definition; e.g., Wikipedia or any quantum information textbook)
+  \item Liu, Jian-wei; Xu, Bing-rong; Song, Zhi-yan, A Survey of Recursive and Recurrent Neural Networks. arXiv:2510.17867 [cs.NE], 16 Oct 2025
+\end{itemize}
+
+\end{document}
