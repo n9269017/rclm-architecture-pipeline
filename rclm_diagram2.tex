@@ -1,0 +1,98 @@
+% RCLLM — Architecture / Pipeline (TikZ, vertical, extra space at recursion label)
+% Compile with: pdflatex (or lualatex/xelatex)
+\documentclass[tikz]{standalone}
+\usepackage{amsmath, amssymb}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, shapes.misc, calc, backgrounds, fit}
+
+\begin{document}
+\begin{tikzpicture}[
+  >=Stealth,
+  font=\small,
+  node distance = 9mm,
+  every node/.style = {inner sep=2pt},
+  process/.style   = {draw, rounded corners, align=center, minimum height=8mm, minimum width=40mm},
+  module/.style    = {draw, rounded corners, align=center, minimum height=9mm,  minimum width=44mm},
+  metric/.style    = {draw, align=center, minimum height=7mm, minimum width=40mm},
+  decision/.style  = {draw, shape=diamond, align=center, inner sep=1.2pt, minimum width=20mm, minimum height=12mm},
+  loopbox/.style   = {draw, rounded corners, dashed, inner sep=8pt}
+]
+
+% --- Backbone: top-to-bottom flow ---
+\node[process] (text) {Text};
+\node[process, below=of text] (tok) {Tokenizer\\(BPE/Unigram)};
+\node[process, below=of tok] (emb) {Embeddings\\+ Positional (RoPE/ALiBi)};
+\node[module,  below=of emb, minimum width=46mm] (tr) {Transformer Decoder\\$L$ blocks};
+
+% --- O/S projections and state build ---
+\node[process, below=12mm of tr] (osproj) {Dual Projections\\$\psi^{(O)}=W_O h_t,\ \psi^{(S)}=W_S h_t$};
+\node[process, below=of osproj, minimum width=48mm] (rho0) {State Build\\$\rho^{(0)}=\alpha\,\psi^{(O)}\psi^{(O)\dagger}+(1-\alpha)\,\psi^{(S)}\psi^{(S)\dagger}$};
+
+% --- Recursion steps (inside dashed fit box) ---
+% CHANGED: increased gap below rho0 from 10mm -> 16mm
+\node[module,  below=16mm of rho0] (update) {Update\\$\rho'=\Lambda_{\theta}(\rho,c_t,m_t)$};
+\node[metric,  below=6mm of update, minimum width=42mm] (monitor) {Monitor\\$S(\rho),\ C_{l_1}(\rho)$};
+\node[decision, below=6mm of monitor] (halt) {$\Delta\mathcal{E}<\varepsilon$?};
+
+% Fit box around recursion nodes
+% CHANGED: add yshift to lift the label slightly, keeping it clear of 'State Build'
+\node[loopbox, fit=(update)(monitor)(halt),
+      label={[align=center, yshift=2mm]above:\footnotesize\textbf{Coherence / Entropy Recursion}\\
+      \footnotesize $\mathcal{E}=S-\lambda C_{l_1}+\beta R$}] (rcibox) {};
+
+% --- Readout and decoding (continue downward) ---
+\node[process, below=12mm of halt] (readout) {Readout\\$u_t=f_{\text{read}}(\rho^\star,h_t)$};
+\node[process, below=of readout] (logits) {Logits\\$W_o u_t$};
+\node[process, below=of logits] (decode) {Decode\\Tokens / Text};
+
+% --- Backbone arrows ---
+\draw[->] (text) -- (tok);
+\draw[->] (tok) -- (emb);
+\draw[->] (emb) -- (tr);
+
+% --- From backbone to RCLLM overlay ---
+\draw[->] (tr) -- node[right, xshift=1mm] {$h_t$} (osproj);
+\draw[->] (osproj) -- (rho0);
+
+% --- Recursion flow ---
+\draw[->] (rho0) -- (update);
+\draw[->] (update) -- (monitor);
+\draw[->] (monitor) -- (halt);
+
+% --- Halt decision branches (Yes → down; No → loop to Update) ---
+\draw[->] (halt.south) -- ++(0,-5mm) node[right, xshift=1mm] {Yes} -- (readout.north);
+\draw[->] (halt.west) -- ++(-10mm,0) |- node[pos=0.25, left] {No} (update.west);
+
+% --- Readout to logits/decoding ---
+\draw[->] (readout) -- (logits);
+\draw[->] (logits) -- (decode);
+
+% --- Optional backbone skip to readout (hybrid readout) ---
+\draw[->, dashed] (tr.east) .. controls +(16mm,0) and +(16mm,0) .. (readout.east)
+  node[midway, right, xshift=1mm] {$h_t$};
+
+% --- Conceptual segment labels with dotted brackets on the left ---
+% Language (Text → Transformer)
+\node[draw, densely dotted, fit={(text)(tok)(emb)(tr)}, inner sep=4mm] (langbox) {};
+\node[left=4mm of langbox.west, anchor=east] {\footnotesize \textbf{Language}};
+
+% Objectivity / Subjectivity (Projections)
+\node[draw, densely dotted, fit={(osproj)}, inner sep=3mm] (osbox) {};
+\node[left=4mm of osbox.west, anchor=east] {\footnotesize \textbf{Objectivity / Subjectivity}};
+
+% Definitiveness / Ambiguity (State build)
+\node[draw, densely dotted, fit={(rho0)}, inner sep=3mm] (dabox) {};
+\node[left=4mm of dabox.west, anchor=east] {\footnotesize \textbf{Definitiveness / Ambiguity}\\[-1pt]\footnotesize $S(\rho),\ \lambda_{\max}(\rho)$};
+
+% --- Small legend at bottom ---
+\node[align=left, below=10mm of decode, anchor=north west] (legend) {
+\begin{minipage}{0.9\textwidth}\footnotesize
+\textbf{Notes:}\;
+$S(\rho)=-\mathrm{Tr}(\rho\log\rho)$,\quad
+$C_{l_1}(\rho)=\sum_{i\neq j}|\rho_{ij}|$,\quad
+$\Delta\mathcal{E}=\mathcal{E}(\rho^{(n)})-\mathcal{E}(\rho^{(n+1)})$.\;
+$\Lambda_\theta$ can preserve PSD \& trace via $G\rho G^\dagger/\mathrm{Tr}(G\rho G^\dagger)$.
+\end{minipage}
+};
+
+\end{tikzpicture}
+\end{document}
