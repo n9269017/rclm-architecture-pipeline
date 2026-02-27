@@ -1,0 +1,221 @@
+\documentclass[tikz]{standalone}
+
+\usepackage{amsmath, amssymb, bm}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, calc, backgrounds, fit}
+
+\begin{document}
+
+\begin{tikzpicture}[
+    >=Stealth,
+    node distance = 12mm and 14mm,
+    font=\small,
+    process/.style = {
+        draw,
+        rounded corners,
+        align=center,
+        minimum height=8mm,
+        minimum width=32mm
+    },
+    module/.style = {
+        draw,
+        rounded corners,
+        align=center,
+        minimum height=10mm,
+        minimum width=36mm
+    },
+    decision/.style = {
+        draw,
+        diamond,
+        inner sep=1.5pt,
+        align=center
+    },
+    metric/.style = {
+        draw,
+        align=center,
+        minimum height=6mm,
+        minimum width=32mm
+    },
+    annot/.style = {
+        align=center
+    },
+    loopbox/.style = {
+        draw,
+        rounded corners,
+        dashed,
+        inner sep=10pt
+    }
+]
+
+\node[process] (inp) {Text};
+
+\node[process, below=of inp] (tok)
+{Tokenizer\\(BPE/Unigram)};
+
+\node[module, below=of tok] (trf)
+{Transformer Core\\(KV cache, attention, MLP)};
+
+\node[process, below=16mm of trf, xshift=-26mm] (projO)
+{$\psi^{(O)} = P_O\, h$};
+
+\node[process, below=16mm of trf, xshift= 26mm] (projS)
+{$\psi^{(S)} = P_S\, h$};
+
+\node[module, below=18mm of $(projO)!0.5!(projS)$] (rho0)
+{
+$\displaystyle
+\rho_0 =
+\alpha\, \psi^{(O)}\psi^{(O)\!\top}
++
+(1-\alpha)\,\psi^{(S)}\psi^{(S)\!\top}
+$\\[2pt]
+\footnotesize
+$\mathrm{Tr}(\rho_0)=1,\ \rho_0 \succeq 0$
+};
+
+\node[
+    loopbox,
+    below=18mm of rho0,
+    minimum width=92mm,
+    minimum height=72mm
+] (rcbox) {};
+
+\node[
+    annot,
+    anchor=south west,
+    fill=white,
+    inner sep=1pt
+]
+at ($(rcbox.north west)+(0,8mm)$)
+{\bf Recursive Coherence Loop};
+
+\node[
+    process,
+    minimum width=82mm,
+    text width=82mm
+] (update)
+at ($(rcbox.north)+(0,-16mm)$)
+{
+$\rho_{t+1}=\Lambda_{\theta}\!\big(\rho_t,\, h,\, \text{meta}\big)$
+};
+
+\node[
+    metric,
+    below=10mm of update,
+    minimum width=82mm,
+    text width=82mm
+] (metrics)
+{
+$\displaystyle
+S(\rho)=-\mathrm{Tr}(\rho\log\rho),
+\quad
+C_{\mathrm{rel}}(\rho)=
+S(\rho_{\mathrm{diag}})-S(\rho)
+$
+};
+
+\node[
+    decision,
+    below=12mm of metrics,
+    minimum width=24mm,
+    minimum height=14mm
+] (halt)
+{
+Halt if\\
+$\Delta S<\varepsilon$\\
+or learned stop
+};
+
+\node[process, above=10mm of update] (rhoin)
+{$\rho_t$};
+
+\draw[->] (rhoin) -- (update);
+
+\draw[->]
+(metrics.west)
+-- ++(-10mm,0)
+|- (update.west);
+
+\draw[->] (update) -- (metrics);
+
+\draw[->] (metrics) -- (halt);
+
+\node[process, below=12mm of rcbox.south] (rhoout)
+{$\rho_T$};
+
+\draw[->]
+(halt.south)
+-- ++(0,-6mm)
+|- (rhoout);
+
+\node[
+    module,
+    below=14mm of rhoout,
+    minimum width=86mm,
+    text width=86mm
+] (readout)
+{
+$\displaystyle
+p(j) =
+\mathrm{Tr}(M_j\, \rho_T),
+\quad
+\sum_j M_j=I,
+\ M_j\succeq 0
+$
+};
+
+\node[process, below=of readout] (decode)
+{Decode\\(sample)};
+
+\draw[->] (inp) -- (tok);
+\draw[->] (tok) -- (trf);
+
+\draw[->] (trf) -- (projO);
+\draw[->] (trf) -- (projS);
+
+\draw[->] (projO) -- (rho0);
+\draw[->] (projS) -- (rho0);
+
+\draw[->]
+(rho0)
+-- ($(rcbox.north)+(0,0)$);
+
+\draw[->]
+($(rcbox.north)+(0,0)$)
+-- (rhoin);
+
+\draw[->] (rhoout) -- (readout);
+\draw[->] (readout) -- (decode);
+
+\node[
+    annot,
+    right=12mm of metrics,
+    text width=54mm
+] (feq)
+{
+\footnotesize
+Coherence-aware step:\\[2pt]
+$\rho_{t+1}
+\leftarrow
+\Pi\!\big[
+\rho_t
+-
+\eta\,
+\nabla_{\rho}
+\big(
+\mathcal{E}(\rho_t)
+-
+T\, C_{\mathrm{rel}}(\rho_t)
+\big)
+\big]$
+};
+
+\node[annot, left=10mm of tok] {Language};
+\node[annot, left=10mm of trf] {Engine};
+\node[annot, left=11mm of projO] {Objectivity};
+\node[annot, right=11mm of projS] {Subjectivity};
+\node[annot, left=10mm of rho0] {Definitiveness / Ambiguity};
+\node[annot, left=12mm of rcbox] {Coherence / Entropy};
+
+\end{tikzpicture}
+
+\end{document}
